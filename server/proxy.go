@@ -22,7 +22,7 @@ var strResponseContinue = []byte("HTTP/1.1 102 Processing\r\n\r\n")
 
 type chnlMtxStrct struct {
 	state string
-	mess chan string
+	mess chan storageValueStruct
 	counter int
 	sValue storageValueStruct
 	mu sync.Mutex
@@ -58,7 +58,7 @@ func notifyFollowers(key string) {
 	defer reqEl.mu.Unlock()
 
 	for i := 1;  i<=reqEl.counter; i++ {
-		reqEl.mess <- reqEl.state
+		reqEl.mess <- reqEl.sValue
 	}
 }
 
@@ -69,18 +69,9 @@ func incReduxCounter(key string) {
 	reqEl.counter++
 }
 
-func getChannelFromRedux(key string) chan string {
+func getChannelFromRedux(key string) chan storageValueStruct {
 	reqEl := redux[key]
-	reqEl.mu.Lock()
-	defer reqEl.mu.Unlock()
 	return reqEl.mess
-}
-
-func getErrorFromRedux(key string) storageValueStruct {
-	reqEl := redux[key]
-	reqEl.mu.Lock()
-	defer reqEl.mu.Unlock()
-	return reqEl.sValue
 }
 
 func waiter(ctx *fasthttp.RequestCtx, finish chan bool) {
@@ -136,15 +127,11 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		go waiter(ctx, finish)
 
 		if !newRequestRequired(storageKey) {
-			println("wait for another request")
+			println("wait for another thread")
 			incReduxCounter(storageKey)
-			state := <-getChannelFromRedux(storageKey)
 
-			if state == "done" {
-				storageValue, _ = getFromStorage(storage, storageKey)
-			} else if state == "error" {
-				storageValue = getErrorFromRedux(storageKey)
-			}
+			storageValue = <-getChannelFromRedux(storageKey)
+
 			setResponse(ctx, storageValue)
 			finish <- true
 			return
@@ -167,12 +154,11 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			b, _ := json.Marshal(storageValue)
 			_ = storage.Set(storageKey, string(b))
-			setReqState(storageKey, "done", storageValueStruct{})
 		} else {
 			_ = storage.Set(storageKey, "")
-			setReqState(storageKey, "error", storageValue)
 		}
 
+		setReqState(storageKey, "done", storageValue)
 		finish <- true
 		notifyFollowers(storageKey)
 		setResponse(ctx, storageValue)
