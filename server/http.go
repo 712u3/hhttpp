@@ -1,13 +1,13 @@
 package server
 
 import (
-	"hhttpp/node"
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"github.com/gin-gonic/gin"
-	"io"
+	"hhttpp/node"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"time"
@@ -88,7 +88,7 @@ func cacheHandler(storage *node.RStorage) func(*gin.Context) {
 		}
 		println("make new request")
 
-		reqBody := getBodyBytes(context.Request.Body)
+		reqBody, _ := ioutil.ReadAll(context.Request.Body)
 
 		response, err := doNewRequest(context, reqBody)
 		if err != nil {
@@ -96,7 +96,7 @@ func cacheHandler(storage *node.RStorage) func(*gin.Context) {
 			context.Status(http.StatusServiceUnavailable)
 			return
 		}
-		resBody := getBodyBytes(response.Body)
+		resBody, _ := ioutil.ReadAll(response.Body)
 
 		//save to storage
 		storageValue := createStorageValue(context.Param("proxyPath"), response, reqBody, resBody)
@@ -178,31 +178,10 @@ func stringInSlice(a string, list []string) bool {
 	return false
 }
 
-func getBodyBytes(reqBody io.ReadCloser) []byte {
-	buf := make([]byte, 1024)
-	num, _ := reqBody.Read(buf)
-	return buf[0:num]
-}
-
-func semiEcho() func(*gin.Context) {
-	view := func(context *gin.Context) {
-		reqBody := string(getBodyBytes(context.Request.Body))
-
-		context.Header("Qqq", "Www")
-
-		context.JSON(http.StatusCreated, gin.H{
-			"testbody": reqBody,
-			"testheaders": context.Request.Header,
-		})
-	}
-	return view
-}
-
 func setupRouter(raftNode *node.RStorage) *gin.Engine {
 	router := gin.Default()
 
 	router.POST("/cluster/join/", joinView(raftNode))
-	router.Any("/a/*proxyPath", semiEcho())
 	router.Any("/g/*proxyPath", cacheHandler(raftNode))
 
 	return router

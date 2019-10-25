@@ -6,8 +6,10 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"github.com/valyala/fasthttp"
 	"hhttpp/node"
+	"io/ioutil"
 	"net/http"
 	"time"
 )
@@ -81,7 +83,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 			finish <- true
 			return
 		}
-		resBody := getBodyBytes(response.Body)
+		resBody, _ := ioutil.ReadAll(response.Body)
 
 		//save to storage
 		storageValue := createStorageValue(string(ctx.Path()), response, ctx.Request.Body(), resBody)
@@ -118,15 +120,24 @@ func toStorageKey(ctx *fasthttp.RequestCtx) string {
 func proxyRequest(ctx *fasthttp.RequestCtx) (*http.Response, error) {
 	client := &http.Client{}
 
-	var newUrl = "http://" + string(ctx.Request.Header.Peek("X-Upstream")) + string(ctx.Path())
+	newHost, _ := getHost(string(ctx.Request.Header.Peek("X-Upstream")))
+	var newUrl = "http://" + newHost + string(ctx.Request.RequestURI())
 
 	newReq, _ := http.NewRequest(string(ctx.Method()), newUrl, bytes.NewReader(ctx.Request.Body()))
 	ctx.Request.Header.VisitAll(func(key, value []byte) {
 		newReq.Header[string(key)] = []string{string(value)}
 	})
 
-	//formParam? something else?
 	return client.Do(newReq)
+}
+
+func getHost(upstream string) (string, error) {
+	switch upstream {
+	case "logic":
+		return "ts102.pyn.ru:2100", nil
+	default:
+		return "", errors.New("upstream not found")
+	}
 }
 
 func setResponse(ctx *fasthttp.RequestCtx, value storageValueStruct) {
