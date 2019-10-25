@@ -14,10 +14,74 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 )
 
 var strResponseContinue = []byte("HTTP/1.1 102 Processing\r\n\r\n")
+
+type chnlMtxStrct struct {
+	state string
+	mess chan string
+	counter int
+	sValue storageValueStruct
+	mu sync.Mutex
+}
+
+var redux = map[string]chnlMtxStrct{}
+
+func setReqState(key string, state string, sValue storageValueStruct) {
+	reqEl := redux[key]
+	reqEl.mu.Lock()
+	defer reqEl.mu.Unlock()
+	reqEl.state = state
+	reqEl.sValue = sValue
+}
+
+func newRequestRequired(key string) bool {
+	reqEl := redux[key]
+	reqEl.mu.Lock()
+	defer reqEl.mu.Unlock()
+
+	if reqEl.state == "pending" {
+		return false
+	}
+
+	reqEl.state = "pending"
+	reqEl.counter = 0
+	return true
+}
+
+func notifyFollowers(key string) {
+	reqEl := redux[key]
+	reqEl.mu.Lock()
+	defer reqEl.mu.Unlock()
+
+	for i := 1;  i<=reqEl.counter; i++ {
+		reqEl.mess <- reqEl.state
+	}
+}
+
+func incReduxCounter(key string) {
+	reqEl := redux[key]
+	reqEl.mu.Lock()
+	defer reqEl.mu.Unlock()
+	reqEl.counter++
+}
+
+func getChannelFromRedux(key string) chan string {
+	reqEl := redux[key]
+	reqEl.mu.Lock()
+	defer reqEl.mu.Unlock()
+	return reqEl.mess
+}
+
+func getErrorFromRedux(key string) storageValueStruct {
+	reqEl := redux[key]
+	reqEl.mu.Lock()
+	defer reqEl.mu.Unlock()
+	return reqEl.sValue
+}
 
 func waiter(ctx *fasthttp.RequestCtx, finish chan bool) {
 	var bw *bufio.Writer
@@ -62,27 +126,31 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		}
 
 		storageKey := toStorageKey(ctx)
-		savedValueRaw := storage.Get(storageKey)
-
-		if savedValueRaw != "" {
-			var storageValue storageValueStruct
-			err := json.Unmarshal([]byte(savedValueRaw), &storageValue)
-			if err != nil {
-				ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
-				return
-			}
-
-			t, _ := time.Parse("2006-01-02 15:04:05 -0700 MST", storageValue.Ts)
-			if t.Add(5 * time.Second).After(time.Now()) {
-				println("return from storage")
-				setResponse(ctx, storageValue)
-				return
-			}
+		storageValue, presented := getFromStorage(storage, storageKey)
+		if presented {
+			setResponse(ctx, storageValue)
+			return
 		}
 
 		var finish = make(chan bool)
 		go waiter(ctx, finish)
 
+		if !newRequestRequired(storageKey) {
+			println("wait for another request")
+			incReduxCounter(storageKey)
+			state := <-getChannelFromRedux(storageKey)
+
+			if state == "done" {
+				storageValue, _ = getFromStorage(storage, storageKey)
+			} else if state == "error" {
+				storageValue = getErrorFromRedux(storageKey)
+			}
+			setResponse(ctx, storageValue)
+			finish <- true
+			return
+		}
+
+		println("make new request")
 		response, err := proxyRequest(ctx)
 		if err != nil {
 			println("new request failed")
@@ -94,31 +162,47 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		resBody, _ := ioutil.ReadAll(response.Body)
 
 		//save to storage
-		storageValue := createStorageValue(string(ctx.Path()), response, ctx.Request.Body(), resBody)
+		storageValue = createStorageValue(string(ctx.Path()), response, ctx.Request.Body(), resBody)
 
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			b, _ := json.Marshal(storageValue)
-			err = storage.Set(storageKey, string(b))
-			if err != nil {
-				println("set new value to storage failed")
-				ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
-
-				finish <- true
-				return
-			}
+			_ = storage.Set(storageKey, string(b))
+			setReqState(storageKey, "done", storageValueStruct{})
+		} else {
+			_ = storage.Set(storageKey, "")
+			setReqState(storageKey, "error", storageValue)
 		}
 
 		finish <- true
-
+		notifyFollowers(storageKey)
 		setResponse(ctx, storageValue)
 	}
 	return view
 }
 
+func getFromStorage(storage *node.RStorage, storageKey string) (storageValueStruct, bool) {
+	savedValueRaw := storage.Get(storageKey)
+
+	if savedValueRaw == "" {
+		return storageValueStruct{}, false
+	}
+
+	var storageValue storageValueStruct
+	_ = json.Unmarshal([]byte(savedValueRaw), &storageValue)
+
+	t, _ := time.Parse("2006-01-02 15:04:05 -0700 MST", storageValue.Ts)
+	if t.Add(5 * time.Second).After(time.Now()) {
+		return storageValue, true
+	}
+
+	return storageValueStruct{}, false
+}
+
 func toStorageKey(ctx *fasthttp.RequestCtx) string {
 	var result = ctx.Request.Header.Peek("Upstream")[:]
-	result = append(result, ctx.Path()[:]...)
+	result = append(result, ctx.URI().String()[:]...)
 	result = append(result, ctx.Request.Header.Peek("X-Request-Id")...)
+	result = append(result, ctx.Request.Body()...)
 
 	return base64.URLEncoding.EncodeToString(sha1.New().Sum(result))
 }
