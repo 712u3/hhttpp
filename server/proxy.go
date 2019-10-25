@@ -24,19 +24,10 @@ type chnlMtxStrct struct {
 	state string
 	mess chan storageValueStruct
 	counter int
-	sValue storageValueStruct
 	mu sync.Mutex
 }
 
 var redux = map[string]chnlMtxStrct{}
-
-func setReqState(key string, state string, sValue storageValueStruct) {
-	reqEl := redux[key]
-	reqEl.mu.Lock()
-	defer reqEl.mu.Unlock()
-	reqEl.state = state
-	reqEl.sValue = sValue
-}
 
 func newRequestRequired(key string) bool {
 	reqEl := redux[key]
@@ -44,6 +35,7 @@ func newRequestRequired(key string) bool {
 	defer reqEl.mu.Unlock()
 
 	if reqEl.state == "pending" {
+		reqEl.counter++
 		return false
 	}
 
@@ -52,21 +44,16 @@ func newRequestRequired(key string) bool {
 	return true
 }
 
-func notifyFollowers(key string) {
+func notifyFollowers(key string, sValue storageValueStruct) {
 	reqEl := redux[key]
 	reqEl.mu.Lock()
 	defer reqEl.mu.Unlock()
+
+	reqEl.state = "done"
 
 	for i := 1;  i<=reqEl.counter; i++ {
-		reqEl.mess <- reqEl.sValue
+		reqEl.mess <- sValue
 	}
-}
-
-func incReduxCounter(key string) {
-	reqEl := redux[key]
-	reqEl.mu.Lock()
-	defer reqEl.mu.Unlock()
-	reqEl.counter++
 }
 
 func getChannelFromRedux(key string) chan storageValueStruct {
@@ -128,7 +115,6 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 
 		if !newRequestRequired(storageKey) {
 			println("wait for another thread")
-			incReduxCounter(storageKey)
 
 			storageValue = <-getChannelFromRedux(storageKey)
 
@@ -154,13 +140,10 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			b, _ := json.Marshal(storageValue)
 			_ = storage.Set(storageKey, string(b))
-		} else {
-			_ = storage.Set(storageKey, "")
 		}
 
-		setReqState(storageKey, "done", storageValue)
 		finish <- true
-		notifyFollowers(storageKey)
+		notifyFollowers(storageKey, storageValue)
 		setResponse(ctx, storageValue)
 	}
 	return view
