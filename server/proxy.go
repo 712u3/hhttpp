@@ -6,11 +6,14 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"github.com/hashicorp/raft"
 	"github.com/valyala/fasthttp"
 	"hhttpp/node"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -46,8 +49,15 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 			return
 		}
 
-		if storage.RaftNode.State() != 2 {  //not a master
-			ctx.Response.SetStatusCode(http.StatusForbidden)
+		if storage.RaftNode.State() != raft.Leader {
+			ctx.Response.SetStatusCode(http.StatusFound)
+			u, err := url.Parse(string(ctx.Request.RequestURI()))
+			if err != nil {
+				ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
+				return
+			}
+			u.Host = string(storage.RaftNode.Leader())
+			ctx.Response.Header.Set("Location", fmt.Sprint(u))
 			return
 		}
 
@@ -58,7 +68,6 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 			var storageValue storageValueStruct
 			err := json.Unmarshal([]byte(savedValueRaw), &storageValue)
 			if err != nil {
-				println("can't parse value")
 				ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
 				return
 			}
@@ -70,7 +79,6 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 				return
 			}
 		}
-		println("make new request2")
 
 		var finish = make(chan bool)
 		go waiter(ctx, finish)
@@ -110,8 +118,6 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 func toStorageKey(ctx *fasthttp.RequestCtx) string {
 	var result = ctx.Request.Header.Peek("Upstream")[:]
 	result = append(result, ctx.Path()[:]...)
-	result = append(result, ctx.Request.Header.Peek("Authorization")[:]...)
-	result = append(result, ctx.Request.Header.Peek("Hh-Proto-Session")...)
 	result = append(result, ctx.Request.Header.Peek("X-Request-Id")...)
 
 	return base64.URLEncoding.EncodeToString(sha1.New().Sum(result))
@@ -120,10 +126,10 @@ func toStorageKey(ctx *fasthttp.RequestCtx) string {
 func proxyRequest(ctx *fasthttp.RequestCtx) (*http.Response, error) {
 	client := &http.Client{}
 
-	newHost, _ := getHost(string(ctx.Request.Header.Peek("X-Upstream")))
-	var newUrl = "http://" + newHost + string(ctx.Request.RequestURI())
+	host := getHost(string(ctx.Request.Header.Peek("X-Upstream")))
+	var url = host + string(ctx.Request.RequestURI())
 
-	newReq, _ := http.NewRequest(string(ctx.Method()), newUrl, bytes.NewReader(ctx.Request.Body()))
+	newReq, _ := http.NewRequest(string(ctx.Method()), url, bytes.NewReader(ctx.Request.Body()))
 	ctx.Request.Header.VisitAll(func(key, value []byte) {
 		newReq.Header[string(key)] = []string{string(value)}
 	})
@@ -131,13 +137,16 @@ func proxyRequest(ctx *fasthttp.RequestCtx) (*http.Response, error) {
 	return client.Do(newReq)
 }
 
-func getHost(upstream string) (string, error) {
-	switch upstream {
-	case "logic":
-		return "ts102.pyn.ru:2100", nil
-	default:
-		return "", errors.New("upstream not found")
+func getHost(upstream string) string {
+	if port, ok := Hosts[upstream]; ok {
+		return "http://ts25.pyn.ru:" + strconv.Itoa(port)
 	}
+
+	if host, ok := ExternalHosts[upstream]; ok {
+		return "http://" + host
+	}
+
+	return upstream
 }
 
 func setResponse(ctx *fasthttp.RequestCtx, value storageValueStruct) {

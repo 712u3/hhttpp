@@ -1,13 +1,8 @@
 package server
 
 import (
-	"bytes"
-	"crypto/sha1"
-	"encoding/base64"
-	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"hhttpp/node"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"time"
@@ -51,105 +46,6 @@ func joinView(storage *node.RStorage) func(*gin.Context) {
 	return view
 }
 
-func cacheHandler(storage *node.RStorage) func(*gin.Context) {
-	view := func(context *gin.Context) {
-		if context.Request.Header["New-Host"] == nil {
-			context.JSON(http.StatusBadRequest, gin.H{
-				"error": "new-host is empty",
-			})
-			return
-		}
-
-		if storage.RaftNode.State() != 2 {  //not a master
-			context.JSON(http.StatusForbidden, gin.H{
-				"master": storage.RaftNode.Leader(),
-			})
-			return
-		}
-
-		storageKey := createStorageKey(context)
-		savedValueRaw := storage.Get(storageKey)
-
-		if savedValueRaw != "" {
-			var storageValue storageValueStruct
-			err := json.Unmarshal([]byte(savedValueRaw), &storageValue)
-			if err != nil {
-				println("can't parse value")
-				context.Status(http.StatusServiceUnavailable)
-				return
-			}
-
-			t, _ := time.Parse("2006-01-02 15:04:05 -0700 MST", storageValue.Ts)
-			if t.Add(5 * time.Second).After(time.Now()) {
-				println("return from storage")
-				setContextResponse(context, storageValue)
-				return
-			}
-		}
-		println("make new request")
-
-		reqBody, _ := ioutil.ReadAll(context.Request.Body)
-
-		response, err := doNewRequest(context, reqBody)
-		if err != nil {
-			println("new request failed")
-			context.Status(http.StatusServiceUnavailable)
-			return
-		}
-		resBody, _ := ioutil.ReadAll(response.Body)
-
-		//save to storage
-		storageValue := createStorageValue(context.Param("proxyPath"), response, reqBody, resBody)
-
-		if response.StatusCode >= 200 && response.StatusCode < 300 {
-			b, _ := json.Marshal(storageValue)
-			err = storage.Set(storageKey, string(b))
-			if err != nil {
-				println("set new value to storage failed")
-				context.Status(http.StatusServiceUnavailable)
-				return
-			}
-		}
-
-		setContextResponse(context, storageValue)
-	}
-	return view
-}
-
-func setContextResponse(context *gin.Context, value storageValueStruct) {
-	for h, values := range value.ResHeaders {
-		for _, val := range values {
-			context.Header(h, val)
-		}
-	}
-	context.Data(value.ResStatus, value.ResHeaders["Content-Type"][0], []byte(value.ResBody))
-}
-
-func doNewRequest(context *gin.Context, body []byte) (*http.Response, error) {
-	client := &http.Client{}
-
-	var newUrl = "http://" + context.Request.Header["New-Host"][0] + "/a" + context.Param("proxyPath")
-
-	newReq, _ := http.NewRequest(context.Request.Method, newUrl, bytes.NewReader(body))
-	for h, val := range context.Request.Header {
-		if !stringInSlice(h, []string{"New-Host"}) {
-			newReq.Header[h] = val
-		}
-	}
-	//formParam? something else?
-	return client.Do(newReq)
-}
-
-func createStorageKey(context *gin.Context) string {
-	var result = getHeaderSafe(context, "New-Host") +
-		context.Param("proxyPath") +
-		getHeaderSafe(context, "Authorization") +
-		getHeaderSafe(context, "Hh-Proto-Session") +
-		getHeaderSafe(context, "X-Request-Id")
-
-	return base64.URLEncoding.EncodeToString(sha1.New().Sum([]byte(result)))
-}
-
 func createStorageValue(path string, response *http.Response, reqBody []byte, resBody []byte) storageValueStruct {
 	return storageValueStruct{
 		Path: path,
@@ -162,27 +58,10 @@ func createStorageValue(path string, response *http.Response, reqBody []byte, re
 	}
 }
 
-func getHeaderSafe(context *gin.Context, key string) string {
-	if context.Request.Header[key] == nil {
-		return ""
-	}
-	return context.Request.Header[key][0]
-}
-
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
 func setupRouter(raftNode *node.RStorage) *gin.Engine {
 	router := gin.Default()
 
 	router.POST("/cluster/join/", joinView(raftNode))
-	router.Any("/g/*proxyPath", cacheHandler(raftNode))
 
 	return router
 }
