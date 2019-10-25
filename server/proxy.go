@@ -85,13 +85,21 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		}
 
 		if storage.RaftNode.State() != raft.Leader {
-			ctx.Response.SetStatusCode(http.StatusFound)
 			u, err := url.Parse(string(ctx.Request.RequestURI()))
 			if err != nil {
 				ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
 				return
 			}
-			u.Host = string(storage.RaftNode.Leader())
+
+			leader := string(storage.RaftNode.Leader())
+			if leader == "" {
+				time.Sleep(200 * time.Millisecond)
+				ctx.Response.SetStatusCode(http.StatusExpectationFailed)
+				return
+			}
+
+			ctx.Response.SetStatusCode(http.StatusFound)
+			u.Host = storage.Get(leader)
 			ctx.Response.Header.Set("Location", fmt.Sprint(u))
 			return
 		}
@@ -156,7 +164,7 @@ func getFromStorage(storage *node.RStorage, storageKey string) (storageValueStru
 	_ = json.Unmarshal([]byte(savedValueRaw), &storageValue)
 
 	t, _ := time.Parse("2006-01-02 15:04:05 -0700 MST", storageValue.Ts)
-	if t.Add(5 * time.Second).After(time.Now()) {
+	if t.Add(5 * time.Minute).After(time.Now()) {
 		return storageValue, true
 	}
 
@@ -175,10 +183,9 @@ func toStorageKey(ctx *fasthttp.RequestCtx) string {
 func proxyRequest(ctx *fasthttp.RequestCtx) (*http.Response, error) {
 	client := &http.Client{}
 
-	host := getHost(string(ctx.Request.Header.Peek("X-Upstream")))
-	var url = host + string(ctx.Request.RequestURI())
+	var uri = getHost(string(ctx.Request.Header.Peek("X-Upstream"))) + string(ctx.Request.RequestURI())
 
-	newReq, _ := http.NewRequest(string(ctx.Method()), url, bytes.NewReader(ctx.Request.Body()))
+	newReq, _ := http.NewRequest(string(ctx.Method()), uri, bytes.NewReader(ctx.Request.Body()))
 	ctx.Request.Header.VisitAll(func(key, value []byte) {
 		newReq.Header[string(key)] = []string{string(value)}
 	})

@@ -16,6 +16,7 @@ import (
 type Opts struct {
 	BindAddress string `long:"bind" env:"BIND" default:"127.0.0.1:3000" description:"ip:port to bind for a node"`
 	JoinAddress string `long:"join" env:"JOIN" default:"" description:"ip:port to join for a node"`
+	ProxyAddress string `long:"proxy" env:"PROXY" default:"" description:"ip:port to listen for client requests"`
 	Bootstrap   bool   `long:"bootstrap" env:"BOOTSTRAP" description:"bootstrap a cluster"`
 	DataDir     string `long:"datadir" env:"DATA_DIR" default:"/tmp/data/" description:"Where to store system data"`
 }
@@ -40,6 +41,7 @@ func main() {
 		BindAddress:    opts.BindAddress,
 		NodeIdentifier: opts.BindAddress,
 		JoinAddress:    opts.JoinAddress,
+		ProxyAddress:   opts.ProxyAddress,
 		DataDir:        opts.DataDir,
 		Bootstrap:      opts.Bootstrap,
 	}
@@ -68,10 +70,13 @@ func main() {
 		}
 	}
 
+	// Hack to provide http clients with proxy address
+	go publishAddress(storage, &config)
+
 	// Start an HTTP server
 	go server.RunHTTPServer(storage)
 
-	if err := fasthttp.ListenAndServe(":5000", server.CacheHandler(storage)); err != nil {
+	if err := fasthttp.ListenAndServe(config.ProxyAddress, server.CacheHandler(storage)); err != nil {
 		log.Fatalf("Error in ListenAndServe: %s", err)
 	}
 }
@@ -80,5 +85,21 @@ func printStatus(s *node.RStorage) {
 	for {
 		log.Printf("[DEBUG] state=%s leader=%s", s.RaftNode.State(), s.RaftNode.Leader())
 		time.Sleep(time.Second * 2)
+	}
+}
+
+func publishAddress(storage *node.RStorage, config *node.Config) {
+	status := <- storage.RaftNode.LeaderCh()
+	if status {
+		for {
+			err := storage.Set(config.BindAddress, config.ProxyAddress)
+			if err != nil {
+				log.Printf("[ERROR] Can't set leader mapping: %+v", err)
+			} else {
+				break
+			}
+
+			time.Sleep(time.Second * 1)
+		}
 	}
 }

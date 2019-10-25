@@ -10,6 +10,7 @@ import (
 
 type joinData struct {
 	Address string `json:"address"`
+	ProxyAddress string `json:"proxy"`
 }
 
 type storageValueStruct struct {
@@ -37,7 +38,8 @@ func joinView(storage *node.RStorage) func(*gin.Context) {
 		}
 
 		err = storage.AddVoter(data.Address)
-		if err != nil {
+		err2 := storage.Set(data.Address, data.ProxyAddress)
+		if err != nil && err2 != nil {
 			c.JSON(503, gin.H{})
 		} else {
 			c.JSON(200, gin.H{})

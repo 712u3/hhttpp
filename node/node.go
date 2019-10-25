@@ -21,6 +21,7 @@ type Config struct {
 	BindAddress    string
 	NodeIdentifier string
 	JoinAddress    string
+	ProxyAddress   string
 	DataDir        string
 	Bootstrap      bool
 }
@@ -140,7 +141,7 @@ func (s *RStorage) JoinCluster(leaderHTTPAddress string) error {
 		return nil
 	}
 
-	body, err := json.Marshal(map[string]string{"address": s.config.BindAddress})
+	body, err := json.Marshal(map[string]string{"address": s.config.BindAddress, "proxy": s.config.ProxyAddress})
 	if err != nil {
 		return err
 	}
