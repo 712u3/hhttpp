@@ -20,45 +20,38 @@ import (
 
 var strResponseContinue = []byte("HTTP/1.1 102 Processing\r\n\r\n")
 
-type chnlMtxStrct struct {
-	state string
+type ChnlMtxStrct struct {
 	mess chan storageValueStruct
 	counter int
-	mu sync.Mutex
 }
 
-var redux = map[string]chnlMtxStrct{}
+var redux sync.Map
 
 func newRequestRequired(key string) bool {
-	reqEl := redux[key]
-	reqEl.mu.Lock()
-	defer reqEl.mu.Unlock()
+	reqElI, _ := redux.Load(key)
+	reqEl, ok := reqElI.(ChnlMtxStrct)
 
-	if reqEl.state == "pending" {
+	if ok {
 		reqEl.counter++
+		redux.Store(key, reqEl)
 		return false
 	}
 
-	reqEl.state = "pending"
 	reqEl.counter = 0
+	reqEl.mess = make(chan storageValueStruct)
+	redux.Store(key, reqEl)
 	return true
 }
 
 func notifyFollowers(key string, sValue storageValueStruct) {
-	reqEl := redux[key]
-	reqEl.mu.Lock()
-	defer reqEl.mu.Unlock()
-
-	reqEl.state = "done"
+	reqElI, _ := redux.Load(key)
+	reqEl, _ := reqElI.(ChnlMtxStrct)
 
 	for i := 1;  i<=reqEl.counter; i++ {
 		reqEl.mess <- sValue
 	}
-}
 
-func getChannelFromRedux(key string) chan storageValueStruct {
-	reqEl := redux[key]
-	return reqEl.mess
+	redux.Delete(key)
 }
 
 func waiter(ctx *fasthttp.RequestCtx, finish chan bool) {
@@ -116,7 +109,10 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		if !newRequestRequired(storageKey) {
 			println("wait for another thread")
 
-			storageValue = <-getChannelFromRedux(storageKey)
+			reqElI, _ := redux.Load(storageKey)
+			reqEl, _ := reqElI.(ChnlMtxStrct)
+
+			storageValue = <-reqEl.mess
 
 			setResponse(ctx, storageValue)
 			finish <- true
