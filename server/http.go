@@ -99,7 +99,7 @@ func cacheHandler(storage *node.RStorage) func(*gin.Context) {
 		resBody := getBodyBytes(response.Body)
 
 		//save to storage
-		storageValue := createStorageValue(context, response, reqBody, resBody)
+		storageValue := createStorageValue(context.Param("proxyPath"), response, reqBody, resBody)
 
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			b, _ := json.Marshal(storageValue)
@@ -150,10 +150,10 @@ func createStorageKey(context *gin.Context) string {
 	return base64.URLEncoding.EncodeToString(sha1.New().Sum([]byte(result)))
 }
 
-func createStorageValue(context *gin.Context, response *http.Response, reqBody []byte, resBody []byte) storageValueStruct {
+func createStorageValue(path string, response *http.Response, reqBody []byte, resBody []byte) storageValueStruct {
 	return storageValueStruct{
-		Path: context.Param("proxyPath"),
-		ReqHeaders: context.Request.Header,
+		Path: path,
+		//ReqHeaders: context.Request.Header,
 		ReqBody: string(reqBody),
 		ResStatus: response.StatusCode,
 		ResBody: string(resBody),

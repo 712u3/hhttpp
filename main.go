@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
+	"github.com/valyala/fasthttp"
 	"log"
 	"os"
 	"time"
 
 	"github.com/jessevdk/go-flags"
-
 	"hhttpp/node"
 	"hhttpp/server"
 )
@@ -57,7 +57,7 @@ func main() {
 	// It must be an address of the cluster leader
 	// We send POST request every second until it succeed
 	if config.JoinAddress != "" {
-		for 1 == 1 {
+		for {
 			time.Sleep(time.Second * 1)
 			err := storage.JoinCluster(config.JoinAddress)
 			if err != nil {
@@ -69,11 +69,15 @@ func main() {
 	}
 
 	// Start an HTTP server
-	server.RunHTTPServer(storage)
+	go server.RunHTTPServer(storage)
+
+	if err := fasthttp.ListenAndServe(":5000", server.CacheHandler(storage)); err != nil {
+		log.Fatalf("Error in ListenAndServe: %s", err)
+	}
 }
 
 func printStatus(s *node.RStorage) {
-	for 1 == 1 {
+	for {
 		log.Printf("[DEBUG] state=%s leader=%s", s.RaftNode.State(), s.RaftNode.Leader())
 		time.Sleep(time.Second * 2)
 	}
