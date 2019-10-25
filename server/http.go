@@ -1,7 +1,7 @@
 package server
 
 import (
-	"../node"
+	"hhttpp/node"
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"

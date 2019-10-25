@@ -8,8 +8,8 @@ import (
 
 	"github.com/jessevdk/go-flags"
 
-	"./node"
-	"./server"
+	"hhttpp/node"
+	"hhttpp/server"
 )
 
 // Opts represents command line options
