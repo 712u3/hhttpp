@@ -10,6 +10,7 @@ import (
 	"github.com/jessevdk/go-flags"
 	"hhttpp/node"
 	"hhttpp/server"
+	"github.com/grafov/bcast"
 )
 
 // Opts represents command line options
@@ -68,10 +69,14 @@ func main() {
 		}
 	}
 
-	// Start an HTTP server
-	go server.RunHTTPServer(storage)
+	//guiLog := make(chan server.LogEntry)
+	guiLog := bcast.NewGroup()
+	go guiLog.Broadcast(0)
 
-	if err := fasthttp.ListenAndServe(":5000", server.CacheHandler(storage)); err != nil {
+	// Start an HTTP server
+	go server.RunHTTPServer(storage, guiLog)
+
+	if err := fasthttp.ListenAndServe(":5000", server.CacheHandler(storage, guiLog)); err != nil {
 		log.Fatalf("Error in ListenAndServe: %s", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/grafov/bcast"
 	"github.com/hashicorp/raft"
 	"github.com/valyala/fasthttp"
 	"hhttpp/node"
@@ -77,7 +78,35 @@ func waiter(ctx *fasthttp.RequestCtx, finish chan bool) {
 	}
 }
 
-func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
+func logIncoming(guiLog *bcast.Group, ctx *fasthttp.RequestCtx, key string) {
+	guiLog.Send(LogEntry{
+		Ts:         time.Now().UTC().String(),
+		Source:     getRequestSource(ctx),
+		DestHost:   string(ctx.Request.Header.Peek("X-Upstream")),
+		DestPath:   string(ctx.Request.RequestURI()),
+		StorageKey: key,
+	})
+}
+
+func logOutcoming(guiLog *bcast.Group, ctx *fasthttp.RequestCtx, key string, source string) {
+	guiLog.Send(LogEntry{
+		Ts:         time.Now().UTC().String(),
+		Source:     source,
+		DestHost:   string(ctx.Request.Header.Peek("X-Upstream")),
+		DestPath:   string(ctx.Request.RequestURI()),
+		StorageKey: key,
+	})
+}
+
+func getRequestSource(ctx *fasthttp.RequestCtx) string {
+	source := ctx.Request.Header.Peek("X-Source")
+	if source == nil {
+		return "unknown"
+	}
+	return string(source)
+}
+
+func CacheHandler(storage *node.RStorage, guiLog *bcast.Group) func(*fasthttp.RequestCtx) {
 	view := func(ctx *fasthttp.RequestCtx) {
 		if ctx.Request.Header.Peek("X-Upstream") == nil {
 			ctx.Response.SetStatusCode(http.StatusBadRequest)
@@ -97,8 +126,10 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		}
 
 		storageKey := toStorageKey(ctx)
+		logIncoming(guiLog, ctx, storageKey)
 		storageValue, presented := getFromStorage(storage, storageKey)
 		if presented {
+			logOutcoming(guiLog, ctx, storageKey, "storage")
 			setResponse(ctx, storageValue)
 			return
 		}
@@ -116,6 +147,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 
 			setResponse(ctx, storageValue)
 			finish <- true
+			logOutcoming(guiLog, ctx, storageKey, "storage")
 			return
 		}
 
@@ -126,6 +158,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 			ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
 
 			finish <- true
+			logOutcoming(guiLog, ctx, storageKey, "error")
 			return
 		}
 		resBody, _ := ioutil.ReadAll(response.Body)
@@ -133,12 +166,13 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		//save to storage
 		storageValue = createStorageValue(string(ctx.Path()), response, ctx.Request.Body(), resBody)
 
-		if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if false && response.StatusCode >= 200 && response.StatusCode < 300 {
 			b, _ := json.Marshal(storageValue)
 			_ = storage.Set(storageKey, string(b))
 		}
 
 		finish <- true
+		logOutcoming(guiLog, ctx, storageKey, "request")
 		notifyFollowers(storageKey, storageValue)
 		setResponse(ctx, storageValue)
 	}
