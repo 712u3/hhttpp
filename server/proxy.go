@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/grafov/bcast"
 	"github.com/hashicorp/raft"
 	"github.com/valyala/fasthttp"
 	"hhttpp/node"
@@ -78,7 +79,26 @@ func waiter(ctx *fasthttp.RequestCtx, finish chan bool) {
 	}
 }
 
-func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
+func logOutcoming(guiLog *bcast.Group, ctx *fasthttp.RequestCtx, key string, source string, birthTime string) {
+	guiLog.Send(LogEntry{
+		Ts:         time.Now().UTC().String(),
+		Source:     source,
+		DestHost:   string(ctx.Request.Header.Peek("X-Upstream")),
+		DestPath:   string(ctx.Request.RequestURI()),
+		StorageKey: key,
+		BirthTime:  birthTime,
+	})
+}
+
+func getRequestSource(ctx *fasthttp.RequestCtx) string {
+	source := ctx.Request.Header.Peek("X-Source")
+	if source == nil {
+		return "unknown"
+	}
+	return string(source)
+}
+
+func CacheHandler(storage *node.RStorage, guiLog *bcast.Group) func(*fasthttp.RequestCtx) {
 	view := func(ctx *fasthttp.RequestCtx) {
 		if ctx.Request.Header.Peek("X-Upstream") == nil {
 			ctx.Response.SetStatusCode(http.StatusBadRequest)
@@ -105,8 +125,11 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		}
 
 		storageKey := toStorageKey(ctx)
+		birthTime := time.Now().UTC().Format("20060102150405.000000")
+		logOutcoming(guiLog, ctx, storageKey, getRequestSource(ctx), birthTime)
 		storageValue, presented := getFromStorage(storage, storageKey)
 		if presented {
+			logOutcoming(guiLog, ctx, storageKey, "from_storage", birthTime)
 			setResponse(ctx, storageValue)
 			return
 		}
@@ -116,6 +139,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 
 		if !newRequestRequired(storageKey) {
 			log.Printf("[INFO] waiting for current request to completem, %s", string(ctx.Path()))
+			logOutcoming(guiLog, ctx, storageKey, "wait_thread", birthTime)
 
 			reqElI, _ := redux.Load(storageKey)
 			reqEl, _ := reqElI.(ChnlMtxStrct)
@@ -124,10 +148,12 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 
 			setResponse(ctx, storageValue)
 			finish <- true
+			logOutcoming(guiLog, ctx, storageKey, "from_thread", birthTime)
 			return
 		}
 
 		log.Printf("[INFO] request to %s, %s", string(ctx.Request.Header.Peek("X-Upstream")), string(ctx.Path()))
+		logOutcoming(guiLog, ctx, storageKey, "make_request", birthTime)
 		response, err := proxyRequest(ctx)
 		if err != nil {
 			log.Printf("[ERROR] request to %s, %s failed with %s", string(ctx.Request.Header.Peek("X-Upstream")), string(ctx.Path()), err)
@@ -135,6 +161,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 
 			finish <- true
 			notifyFollowers(storageKey, storageValue)
+			logOutcoming(guiLog, ctx, storageKey, "error", birthTime)
 			return
 		}
 		resBody, _ := ioutil.ReadAll(response.Body)
@@ -156,6 +183,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		}
 
 		finish <- true
+		logOutcoming(guiLog, ctx, storageKey, "from_request", birthTime)
 		notifyFollowers(storageKey, storageValue)
 		setResponse(ctx, storageValue)
 	}

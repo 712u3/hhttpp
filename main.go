@@ -10,6 +10,7 @@ import (
 	"github.com/jessevdk/go-flags"
 	"hhttpp/node"
 	"hhttpp/server"
+	"github.com/grafov/bcast"
 )
 
 // Opts represents command line options
@@ -73,10 +74,13 @@ func main() {
 	// Hack to provide http clients with proxy address
 	go publishAddress(storage, &config)
 
-	// Start an HTTP server
-	go server.RunHTTPServer(storage)
+	guiLog := bcast.NewGroup()
+	go guiLog.Broadcast(0)
 
-	if err := fasthttp.ListenAndServe(config.ProxyAddress, server.CacheHandler(storage)); err != nil {
+	// Start an HTTP server
+	go server.RunHTTPServer(storage, guiLog)
+
+	if err := fasthttp.ListenAndServe(config.ProxyAddress, server.CacheHandler(storage, guiLog)); err != nil {
 		log.Fatalf("Error in ListenAndServe: %s", err)
 	}
 }

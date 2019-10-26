@@ -76,5 +76,5 @@ var ExternalHosts = map[string]string{
 	"kardinal": "10.208.30.56:3500",
 	"kardinal-ranking": "10.208.30.56:3600",
 
-	"backend": "localhost:10000",
+	"backend": "10.208.80.91:10000",
 }
