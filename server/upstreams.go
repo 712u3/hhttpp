@@ -75,4 +75,6 @@ var ExternalHosts = map[string]string{
 	"jodserver": "10.208.30.56:2600",
 	"kardinal": "10.208.30.56:3500",
 	"kardinal-ranking": "10.208.30.56:3600",
+
+	"backend": "localhost:10000",
 }

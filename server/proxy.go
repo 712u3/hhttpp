@@ -11,6 +11,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"hhttpp/node"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -93,7 +94,6 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 
 			leader := string(storage.RaftNode.Leader())
 			if leader == "" {
-				time.Sleep(200 * time.Millisecond)
 				ctx.Response.SetStatusCode(http.StatusExpectationFailed)
 				return
 			}
@@ -115,7 +115,7 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		go waiter(ctx, finish)
 
 		if !newRequestRequired(storageKey) {
-			println("wait for another thread")
+			log.Printf("[INFO] waiting for current request to completem, %s", string(ctx.Path()))
 
 			reqElI, _ := redux.Load(storageKey)
 			reqEl, _ := reqElI.(ChnlMtxStrct)
@@ -127,13 +127,14 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 			return
 		}
 
-		println("make new request")
+		log.Printf("[INFO] request to %s, %s", string(ctx.Request.Header.Peek("X-Upstream")), string(ctx.Path()))
 		response, err := proxyRequest(ctx)
 		if err != nil {
-			println("new request failed")
+			log.Printf("[ERROR] request to %s, %s failed with %s", string(ctx.Request.Header.Peek("X-Upstream")), string(ctx.Path()), err)
 			ctx.Response.SetStatusCode(http.StatusServiceUnavailable)
 
 			finish <- true
+			notifyFollowers(storageKey, storageValue)
 			return
 		}
 		resBody, _ := ioutil.ReadAll(response.Body)
@@ -142,8 +143,16 @@ func CacheHandler(storage *node.RStorage) func(*fasthttp.RequestCtx) {
 		storageValue = createStorageValue(string(ctx.Path()), response, ctx.Request.Body(), resBody)
 
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
-			b, _ := json.Marshal(storageValue)
-			_ = storage.Set(storageKey, string(b))
+			b, err := json.Marshal(storageValue)
+			if err != nil {
+				log.Printf("[ERROR] response store failed, %s", err)
+			} else {
+				err = storage.Set(storageKey, string(b))
+				time.Sleep(1 * time.Second)
+				if err != nil {
+					log.Printf("[ERROR] response store failed, %s", err)
+				}
+			}
 		}
 
 		finish <- true
@@ -173,7 +182,7 @@ func getFromStorage(storage *node.RStorage, storageKey string) (storageValueStru
 
 func toStorageKey(ctx *fasthttp.RequestCtx) string {
 	var result = ctx.Request.Header.Peek("Upstream")[:]
-	result = append(result, ctx.URI().String()[:]...)
+	result = append(result, ctx.URI().RequestURI()[:]...)
 	result = append(result, ctx.Request.Header.Peek("X-Request-Id")...)
 	result = append(result, ctx.Request.Body()...)
 

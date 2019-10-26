@@ -59,7 +59,7 @@ type logEvent struct {
 
 // Apply applies a Raft log entry to the key-value store.
 func (s *RStorage) Apply(logEntry *raft.Log) interface{} {
-	log.Println("[DEBUG] Applying a new log entry to the store")
+	//log.Println("[DEBUG] Applying a new log entry to the store")
 
 	var event logEvent
 	if err := json.Unmarshal(logEntry.Data, &event); err != nil {
@@ -67,7 +67,7 @@ func (s *RStorage) Apply(logEntry *raft.Log) interface{} {
 	}
 
 	if event.Type == "set" {
-		log.Printf("[DEBUG] set operation received key=%s value=%s", event.Key, event.Value)
+		//log.Printf("[DEBUG] set operation received key=%s value=%s", event.Key, event.Value)
 		s.mutex.Lock()
 		defer s.mutex.Unlock()
 		s.storage[event.Key] = event.Value
