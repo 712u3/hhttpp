@@ -27,7 +27,7 @@ socket.onopen = function () {
 
 const addNewRequest = (obj) => {
     const div = document.createElement("div");
-    div.innerHTML = obj.Source + " -> " + obj.DestHost + obj.DestPath;
+    div.innerHTML = obj.DestHost + obj.DestPath;
     div.id = obj.BirthTime;
     div.classList.add("div-el1");
     output.appendChild(div);
@@ -40,10 +40,11 @@ const getIconFor = (name) => {
     return i;
 };
 
-const addStateTorequest = (obj) => {
+const addStateToRequest = (obj) => {
     const el = document.getElementById(obj.BirthTime);
     if (!el) {
-        console.log("fatal error addStateTorequest");
+        console.log("fatal error addStateToRequest");
+        return;
     }
     const span = document.createElement("span");
 
@@ -51,7 +52,13 @@ const addStateTorequest = (obj) => {
     span.appendChild(getIconFor(obj.Source));
     span.classList.add("my-status");
     span.classList.add(colors[obj.Source]);
-    el.appendChild(span);
+
+
+    if (el.firstChild) {
+        el.insertBefore(span, el.firstChild)
+    } else {
+        el.appendChild(span);
+    }
 };
 
 socket.onmessage = function (e) {
@@ -61,7 +68,7 @@ socket.onmessage = function (e) {
         frontDb[obj.StorageKey] = obj;
         addNewRequest(obj);
     } else {
-        addStateTorequest(obj);
+        addStateToRequest(obj);
     }
 
     console.log(frontDb);
